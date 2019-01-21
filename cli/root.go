@@ -2,19 +2,16 @@ package cli
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
+	"path/filepath"
 
 	homedir "github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	yaml "gopkg.in/yaml.v2"
 )
 
 var home string
-var cfgFile string
-var context string
 
 var rootCli = &cobra.Command{
 	Use:   "clh",
@@ -42,52 +39,10 @@ var useContextCli = &cobra.Command{
 	Short: "Switch to another context and save it as default",
 	Long:  "Use provided context as default",
 	Run: func(cmd *cobra.Command, args []string) {
-		ctx := context
 		if len(args) > 0 {
-			ctx = args[0]
+			viper.Set("context", args[0])
 		}
-
-		fileName := viper.GetString("config")
-
-		file, err := os.OpenFile(fileName, os.O_RDONLY, 0600)
-		if err != nil {
-			log.Panic("Can't open config:", err)
-			os.Exit(1)
-		}
-
-		yamlFile, err := ioutil.ReadAll(file)
-		if err != nil {
-			log.Panic("Can't read config:", err)
-			os.Exit(1)
-		}
-
-		file.Close()
-
-		cfg := map[string]interface{}{}
-		if err := yaml.Unmarshal(yamlFile, cfg); err != nil {
-			log.Panic("Can't parse config: ", err)
-			os.Exit(1)
-		}
-		cfg["context"] = ctx
-
-		marshal, err := yaml.Marshal(cfg)
-		if err != nil {
-			log.Panic("Can't marshal config: ", err)
-			os.Exit(1)
-		}
-
-		file, err = os.OpenFile(fileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-		if err != nil {
-			log.Panic("Can't open config:", err)
-			os.Exit(1)
-		}
-
-		if _, err := file.WriteString(string(marshal[:])); err != nil {
-			log.Panic("Can't parse config: ", err)
-			os.Exit(1)
-		}
-
-		file.Close()
+		saveConfig()
 	},
 }
 
@@ -96,11 +51,7 @@ var configCli = &cobra.Command{
 	Short: "Configure clh",
 	Long:  `Helps configuring clh tool such as Hub address and credentials`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fileName := viper.GetString("config")
-		if err := viper.WriteConfigAs(fileName + ".test.yaml"); err != nil {
-			log.Panic("Can't save config: ", err)
-			os.Exit(1)
-		}
+		saveConfig()
 	},
 }
 
@@ -111,10 +62,10 @@ func init() {
 	viper.BindPFlag("log_level", rootCli.PersistentFlags().Lookup("log_level"))
 	viper.SetDefault("log_level", "info")
 
-	rootCli.PersistentFlags().StringVarP(&cfgFile, "config", "", "", "Path to a config file")
+	rootCli.PersistentFlags().StringP("config", "", "", "Path to a config file")
 	viper.BindPFlag("config", rootCli.PersistentFlags().Lookup("config"))
 
-	rootCli.PersistentFlags().StringVarP(&context, "context", "c", "", "CLH context name")
+	rootCli.PersistentFlags().StringP("context", "c", "", "CLH context name")
 	viper.BindPFlag("context", rootCli.PersistentFlags().Lookup("context"))
 	viper.SetDefault("context", "default")
 
@@ -175,6 +126,7 @@ func cobraSecondPhase() {
 	// Third: + cli
 	setLogLevel()
 
+	cfgFile := viper.GetString("config")
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	}
@@ -186,15 +138,13 @@ func cobraSecondPhase() {
 	// Forth: + custom config file
 	setLogLevel()
 
-	if context == "" {
-		context = viper.GetString("context")
-	}
-
 	// Bind and set defaults AFTER cobra is ready
 	viperSecondPhase()
 }
 
 func viperSecondPhase() {
+	context := viper.GetString("context")
+
 	// Root
 
 	if viper.ConfigFileUsed() != "" {
@@ -208,6 +158,8 @@ func viperSecondPhase() {
 	viper.BindPFlag(context+".endpoint", configCli.PersistentFlags().Lookup("endpoint"))
 	viper.SetDefault(context+".endpoint", "https://api.cloudlethub.com/")
 
+	viper.BindPFlag(context+".username", configCli.PersistentFlags().Lookup("username"))
+
 	viper.BindPFlag(context+".secret_key", configCli.PersistentFlags().Lookup("secret_key"))
 }
 
@@ -218,6 +170,23 @@ func setLogLevel() {
 		log.Error("Error in log level parsing, fall back to DEBUG: ", err)
 	}
 	log.SetLevel(ll)
+}
+
+func saveConfig() {
+	fileName := viper.GetString("config")
+	dirName := filepath.Dir(fileName)
+
+	if err := os.MkdirAll(dirName, os.ModePerm); err != nil {
+		log.Panic("Can't create config directory: ", err)
+		os.Exit(1)
+	}
+
+	// TODO: Some stuff needs to be filtered out before saving
+	// Needs: https://github.com/spf13/viper/issues/632
+	if err := viper.WriteConfigAs(fileName); err != nil {
+		log.Panic("Can't save config: ", err)
+		os.Exit(1)
+	}
 }
 
 func Execute() {
